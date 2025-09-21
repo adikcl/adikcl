@@ -1,0 +1,58 @@
+trigger: none
+
+stages:
+- stage: DeployToDev
+  jobs:
+  - deployment: DeployDev
+    environment: 'dev'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: k8s-manifests
+
+          - task: AzureKeyVault@2
+            inputs:
+              azureSubscription: 'Azure-RM-Connection'
+              KeyVaultName: 'prod-kv'
+              SecretsFilter: '*'
+              RunAsPreJob: true
+
+          - bash: |
+              ./scripts/create-k8s-secrets.sh
+            displayName: 'Create/Update K8s secrets from KV'
+
+          - task: KubernetesManifest@1
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'AKS-Service-Connection'
+              namespace: 'demo'
+              manifests: |
+                k8s/service.yaml
+                k8s/deployment.yaml
+              containers: |
+                $(acrName).azurecr.io/flaskapp:$(Build.BuildId)
+
+- stage: DeployToProd
+  dependsOn: DeployToDev
+  condition: succeeded()
+  jobs:
+  - deployment: DeployProd
+    environment: 'prod'   # UI: add manual approvers here
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: k8s-manifests
+          - task: KubernetesManifest@1
+            inputs:
+              action: 'deploy'
+              kubernetesServiceConnection: 'AKS-Service-Connection'
+              namespace: 'demo'
+              manifests: |
+                k8s/service.yaml
+                k8s/deployment.yaml
+              containers: |
+                $(acrName).azurecr.io/flaskapp:$(Build.BuildId)

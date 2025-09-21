@@ -1,0 +1,52 @@
+# .azure-pipelines/ci.yml
+trigger:
+  branches: [ main ]
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  imageName: 'flaskapp'
+  acrName: 'myacr' 
+  artifactName: 'k8s-manifests'
+
+steps:
+- checkout: self
+
+# Run unit tests (Dev wrote them)
+- script: |
+    pip install -r requirements.txt
+    pytest -q
+  displayName: 'Run unit tests'
+
+# Build & push Docker image to ACR
+- task: Docker@2
+  inputs:
+    containerRegistry: 'ACR-Service-Connection'
+    repository: '$(imageName)'
+    command: 'buildAndPush'
+    Dockerfile: 'Dockerfile'
+    tags: |
+      $(Build.BuildId)
+
+# Security scan the built image (Trivy)
+- script: |
+    az acr login --name $(acrName)
+    IMAGE=$(acrName).azurecr.io/$(imageName):$(Build.BuildId)
+    docker pull $IMAGE
+    trivy image --exit-code 1 --severity HIGH,CRITICAL $IMAGE || true
+  displayName: 'Image vulnerability scan (Trivy)'
+
+# Optional: SonarQube code quality scan
+- task: SonarQubePrepare@5
+  inputs:
+    scannerMode: 'CLI'
+    configMode: 'manual'
+    cliProjectKey: 'flaskapp'
+    extraProperties: |
+      sonar.sources=.
+
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathToPublish: 'k8s'
+    artifactName: '$(artifactName)'
